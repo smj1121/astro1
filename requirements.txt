@@ -1,4 +1,201 @@
-streamlit
-astropy
-numpy
-pillow
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>C-M Diagram Visualizer</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // 샘플 데이터 (플레이아데스 성단)
+    const sampleData = {
+      pleiades: [
+        { bv: 0.0, mag: 4.0 }, { bv: 0.1, mag: 4.5 }, { bv: 0.3, mag: 5.0 },
+        { bv: 0.5, mag: 6.0 }, { bv: 0.7, mag: 7.0 }, { bv: 1.0, mag: 8.5 }
+      ],
+      hyades: [
+        { bv: 0.2, mag: 3.5 }, { bv: 0.4, mag: 4.0 }, { bv: 0.6, mag: 5.5 },
+        { bv: 0.8, mag: 6.5 }, { bv: 1.1, mag: 8.0 }
+      ]
+    };
+
+    const App = () => {
+      const [selectedCluster, setSelectedCluster] = useState('pleiades');
+      const [data, setData] = useState(sampleData.pleiades);
+      const [mainSequence, setMainSequence] = useState([
+        { bv: -0.5, mag: -2.0 },
+        { bv: 2.0, mag: 12.0 }
+      ]);
+      const [distanceModulus, setDistanceModulus] = useState(0);
+      const chartRef = useRef(null);
+      const canvasRef = useRef(null);
+
+      // 파일 업로드 처리
+      const handleFileUpload = (event) => {
+        const file = event.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const text = e.target.result;
+            const lines = text.split('\n').slice(1); // CSV 헤더 제외
+            const uploadedData = lines.map(line => {
+              const [bv, mag] = line.split(',').map(Number);
+              return { bv, mag };
+            }).filter(point => !isNaN(point.bv) && !isNaN(point.mag));
+            setData(uploadedData);
+          };
+          reader.readAsText(file);
+        }
+      };
+
+      // 주계열 선 조정
+      const handleMainSequenceDrag = (index, newBv, newMag) => {
+        const updatedMainSequence = [...mainSequence];
+        updatedMainSequence[index] = { bv: newBv, mag: newMag };
+        setMainSequence(updatedMainSequence);
+        calculateDistanceModulus(updatedMainSequence);
+      };
+
+      // 거리 모듈러스 계산
+      const calculateDistanceModulus = (mainSequence) => {
+        // 주계열 선의 평균 수직 이동량으로 거리 모듈러스 추정
+        const avgMagShift = data.reduce((sum, point) => {
+          const closestMainSequenceMag = interpolateMainSequence(point.bv, mainSequence);
+          return sum + (point.mag - closestMainSequenceMag);
+        }, 0) / data.length;
+        setDistanceModulus(avgMagShift.toFixed(2));
+      };
+
+      // 주계열 선에서 B-V에 해당하는 등급 보간
+      const interpolateMainSequence = (bv, mainSequence) => {
+        const [p1, p2] = mainSequence;
+        const slope = (p2.mag - p1.mag) / (p2.bv - p1.bv);
+        return p1.mag + slope * (bv - p1.bv);
+      };
+
+      // 차트 렌더링
+      useEffect(() => {
+        if (chartRef.current) {
+          chartRef.current.destroy();
+        }
+
+        const ctx = canvasRef.current.getContext('2d');
+        chartRef.current = new Chart(ctx, {
+          type: 'scatter',
+          data: {
+            datasets: [
+              {
+                label: '성단 데이터',
+                data: data,
+                backgroundColor: 'rgba(255, 99, 132, 0.8)',
+                borderColor: 'rgba(255, 99, 132, 1)',
+                pointRadius: 5
+              },
+              {
+                label: '주계열 맞춤',
+                data: mainSequence,
+                backgroundColor: 'rgba(54, 162, 235, 0.8)',
+                borderColor: 'rgba(54, 162, 235, 1)',
+                pointRadius: 5,
+                showLine: true
+              }
+            ]
+          },
+          options: {
+            scales: {
+              x: {
+                title: { display: true, text: '색지수 (B-V)' },
+                min: -0.5,
+                max: 2.0
+              },
+              y: {
+                title: { display: true, text: '겉보기 등급 (m)' },
+                reverse: true,
+                min: -5,
+                max: 20
+              }
+            },
+            plugins: {
+              legend: { display: true },
+              tooltip: { enabled: true }
+            }
+          }
+        });
+
+        return () => {
+          if (chartRef.current) {
+            chartRef.current.destroy();
+          }
+        };
+      }, [data, mainSequence]);
+
+      // 드래그 앤 드롭 핸들러
+      const handleMouseDown = (event, index) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = (2.0 - (-0.5)) / rect.width;
+        const scaleY = (20 - (-5)) / rect.height;
+
+        const onMouseMove = (moveEvent) => {
+          const x = (moveEvent.clientX - rect.left) * scaleX - 0.5;
+          const y = 20 - (moveEvent.clientY - rect.top) * scaleY;
+          handleMainSequenceDrag(index, x, y);
+        };
+
+        const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      };
+
+      return (
+        <div className="container mx-auto p-4">
+          <h1 className="text-2xl font-bold mb-4">C-M Diagram Visualizer</h1>
+          <div className="mb-4">
+            <label className="mr-2">성단 선택:</label>
+            <select
+              className="border p-1"
+              value={selectedCluster}
+              onChange={(e) => {
+                setSelectedCluster(e.target.value);
+                setData(sampleData[e.target.value]);
+              }}
+            >
+              <option value="pleiades">플레이아데스</option>
+              <option value="hyades">히아데스</option>
+            </select>
+          </div>
+          <div className="mb-4">
+            <label className="mr-2">데이터 업로드 (CSV):</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileUpload}
+              className="border p-1"
+            />
+            <p className="text-sm text-gray-600">CSV 형식: bv,mag (예: 0.0,4.0)</p>
+          </div>
+          <div className="mb-4">
+            <canvas ref={canvasRef} width="800" height="400"></canvas>
+            <p className="mt-2">거리 모듈러스 (m-M): {distanceModulus}</p>
+            <p className="text-sm text-gray-600">주계열 점을 드래그하여 조정하세요.</p>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
